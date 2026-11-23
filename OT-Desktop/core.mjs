@@ -116,3 +116,25 @@ export function exportRows(state){const list=[];const grouped=new Map();const in
  for(const d of state.roster.days){for(const s of d.shifts){const key=d.date+'|'+s;if(!grouped.has(key))grouped.set(key,[]);}}
  const rank={morning:0,afternoon:1,night:2};let n=0;for(const [key,rows] of [...grouped].sort(([a],[b])=>{const [ad,as]=a.split('|'),[bd,bs]=b.split('|');return ad.localeCompare(bd)||(rank[as]-rank[bs]);})){const [date,shift]=key.split('|');if(!rows.length)list.push({date,shift,caseNo:null,empty:true});else for(const r of rows.sort((a,b)=>a.time.localeCompare(b.time)))list.push({...r,date,shift,caseNo:++n,empty:false});}return list;
 }
+
+export const validAmount = value => Number.isFinite(value) && value >= 0;
+
+export function snapshotShiftRates(days, previousDays, defaultRate) {
+ for (const day of days) {
+  const previous = previousDays.find(item => item.date === day.date);
+  const rates = {};
+  for (const shift of day.shifts) {
+   const rate = day.rates?.[shift] ?? previous?.rates?.[shift] ?? defaultRate;
+   if (validAmount(rate)) rates[shift] = rate;
+  }
+  day.rates = rates;
+ }
+}
+
+export function paymentProblem(state) {
+ if (state.roster.days.some(day => day.shifts.some(shift => !validAmount(day.rates?.[shift]))))
+  return 'กรอกค่าเวรต่อเวรในข้อมูลแพทย์';
+ if (state.cases.some(c => c.include !== false && !validAmount(c.fee)))
+  return 'กรอกค่าตอบแทนของทุกเคสที่รวมใน Excel';
+ return '';
+}
