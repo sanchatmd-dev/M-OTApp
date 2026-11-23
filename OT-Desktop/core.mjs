@@ -26,14 +26,85 @@ export function parseRoster(data,profile,width){const text=digits(data.text),m=m
  warnings.push('ตรวจวันที่และเวรจากภาพก่อนยืนยัน โดยเฉพาะตารางที่จัดคอลัมน์ต่างจากตัวอย่าง');
  return {month,year,days,warnings,raw:text};
 }
+// A hospital header may show only a pediatric title and one visible name.
+export function partialPatientName(value){
+ return /^ด\s*\.\s*[ชญ]\s*(?:\.{1,}|…)[ \t]+[ก-๙]{2,}$/.test(value);
+}
+
+// Accept noisy labels only inside the patient identifier row on hospital forms.
+export function headerPatientName(text){
+ const header = /\b(?:HN|AN)[ \t]*[:;]?[ \t]*\d{5,}[ \t]+(?:[ชซข][ืีึ][่้]?อ)[ \t]*[:;!][ \t]*([^\n:;!]+?)[ \t]+อาย(?:ุ)?[ \t]*[:;!]/gi;
+ for(const match of text.matchAll(header)){
+  const value=match[1].trim();
+  const withoutTitle=value.replace(/^(?:ด\s*\.\s*[ชญ](?:\s*\.)?|เด็กชาย|เด็กหญิง|นางสาว|นาง|นาย)\s*/, '');
+  if(partialPatientName(value))return value;
+  if(/^[ก-๙]{2,}(?:[ \t]+[ก-๙]{2,})+$/.test(withoutTitle))return value;
+ }
+ return '';
+}
+
+export function shortWardName(value){
+ if(/\bSPICU\b/i.test(value))return 'SPICU';
+ // Printed Thai tone marks and the lower vowel in สุข may drop out in OCR.
+ if(/เปี[่]?ยมสุ?ข[ \t]*[4๔](?![\d๐-๙])/.test(value))return 'เปี่ยมสุข 4';
+ return value;
+}
+
+// Consume adjacent age components only. A number elsewhere on the form is not an age.
+export function patientAgeWard(raw){
+ const text=digits(raw).replace(/：/g,':');
+ let age='';
+ for(const label of text.matchAll(/อายุ\s*[:;]?\s*|อาย\s*[:;]\s*/g)){
+  const value=text.slice(label.index+label[0].length).replace(/^Unknown\s*/i,'');
+  const component=/(\d{1,3})\s*(ปี|ฟี|ี|เดือน|วัน)/y;
+  const units=new Map();
+  let offset=0;
+  while(offset<value.length){
+   component.lastIndex=offset;
+   const match=component.exec(value);
+   if(!match)break;
+   const unit=['ฟี','ี'].includes(match[2])?'ปี':match[2];
+   if(units.has(unit))break;
+   units.set(unit,Number(match[1]));
+   const separator=value.slice(component.lastIndex).match(/^[ \t\r\n),l]*/)[0];
+   offset=component.lastIndex+separator.length;
+  }
+  const order=['ปี','เดือน','วัน'];
+  const unit=order.find(u=>units.get(u)>0)||order.reverse().find(u=>units.has(u));
+  if(unit){age=units.get(unit)+' '+unit;break;}
+ }
+
+ let ward='';
+ // Prefer the hospital's department/building field. Legacy forms can label it Ward.
+ const labels=[/(?:แผนก|แผน[คn]|แผพก|แผษก|ตึก)[ \t]*[:;]?[ \t]*/gi,
+               /(?:หอผู้ป่วย[ \t]*[:;]?[ \t]*|\bward[ \t]*[:;][ \t]*)/gi];
+ for(const pattern of labels){
+  for(const label of text.matchAll(pattern)){
+   let tail=text.slice(label.index+label[0].length);
+   if(/^\r?\n/.test(tail))tail=tail.replace(/^\r?\n[ \t]*/,'');
+   const line=tail.split(/\r?\n/,1)[0];
+   const bedHeader=tail.match(/^([^\r\n:;]{0,100}?\bNICU[ \t]*[-–—][ \t]*IMC)\b[ \t]*(?:\r?\n[ \t]*)?(?:เตียง|เดียง|เด็ยง|เียง)[ \t]*[:;]?[ \t]*(?:\r?\n[ \t]*)?N[ \t]*([SI])/i);
+   if(bedHeader){
+    ward=bedHeader[2].toUpperCase()==='S'?'NS-ปส.3':'NICU';
+    break;
+   }
+   const value=line.split(/(?:เตียง|เดียง|เด็ยง|เียง|เพียง\s*[:;]|\bbed\b|อายุ|อาย\s*:|แพทย์|ชื่อ|สิทธิ|หมายเหตุ|เพศ|\b(?:HN|AN|CID|BW|BSA|CDSS|Provision\s+Dx)\b)/i)[0]
+    .replace(/[ \t-]+$/,'').trim();
+   if(value && value.length<=100 && !/[:;]/.test(value) && /[ก-ฮA-Za-z0-9]/.test(value)){
+    ward=shortWardName(value);break;
+   }
+  }
+  if(ward)break;
+ }
+ return {age,ward};
+}
+
 export function parsePatient(data,metadata={}){const raw=digits(data.text),lines=linesFrom(data);const text=raw.replace(/[：]/g,':');const allDates=datesIn(text);const ts=timesIn(text);
  const date=allDates[0]?.date||metadata.date||'';let time='';if(allDates.length){const tail=text.slice(allDates[0].offset+allDates[0].raw.length,allDates[0].offset+allDates[0].raw.length+100);time=timesIn(tail)[0]?.time??'';}
  if(!time)time=ts[0]?.time||metadata.time||'';
  const getID=(tag)=>{const match=text.match(new RegExp('\\b'+tag+'\\s*[:;]?\\s*([0-9][0-9 \\t]{5,18})','i'));return match?match[1].replace(/\s/g,''):'';};
- const nameCandidates=[...text.matchAll(/(?:ชื่อ|ซื่อ)\s*[:;!]?\s*([^\n]+)/g)].map(m=>m[1].split(/อายุ|อาย\s*[:;]|แผนก|CID|BW|AN\s*:|HN\s*:/i)[0].trim()).filter(s=>/[ก-๙]{2}/.test(s));let name=nameCandidates.find(s=>/^ด[.\s]?[ชญซ]/.test(s))||nameCandidates[0]||'';
- const age=(text.match(/อายุ\s*[:;]?\s*([^\n]+)/)?.[1]??'').split(/แผนก|CID|BW|เพศ|AN\s*:|HN\s*:/i)[0].trim();
- let ward=(text.match(/(?:ward|หอผู้ป่วย|ตึก)\s*[:;]?\s*([^\n]+)/i)?.[1]??'').split(/เตียง|bed/i)[0].trim();
- if(!ward){ward=(text.match(/(?:เปี่ยมสุข|เปียมสุข)\s*\d+|\b(?:SPICU|PICU|NICU|NS|IMC)\b|นว\.?\s*\d+/i)?.[0]??'');}
+ const nameCandidates=[...text.matchAll(/(?:ชื่อ|ซื่อ)\s*[:;!]?\s*([^\n]+)/g)].map(m=>m[1].split(/อายุ|อาย\s*[:;]|แผนก|CID|BW|AN\s*:|HN\s*:/i)[0].trim()).filter(s=>/[ก-๙]{2}/.test(s));const name=headerPatientName(text)||nameCandidates.find(s=>/^ด[.\s]?[ชญซ]/.test(s))||nameCandidates[0]||'';
+ const {age,ward}=patientAgeWard(text);
  let diagnosis='';const am=[...text.matchAll(/(?:^|\n)\s*A\s*[:：]\s*([^\n]+(?:\n(?!\s*[SOPA]\s*:|\s*\d{1,2}\/|\s*\[)[^\n]+)?)/gi)];if(am.length)diagnosis=clean(am[0][1]);
  if(!diagnosis){const a=lines.find(l=>/^A\s*:?$/.test(l.text));if(a){const p=lines.find(l=>/^P\s*:?$/.test(l.text)&&l.y0>a.y0);diagnosis=lines.filter(l=>l.x0>a.x1&&l.x0<a.x0+500&&l.y0>=a.y0-45&&l.y0<(p?.y0??a.y0+160)-12).map(l=>l.text).join(' ');}}
  const warnings=['ตรวจ AN, HN และชื่อภาษาไทยเทียบกับรูป'];if(!allDates.length)warnings.push(metadata.date?'วันที่จาก '+metadata.source:'ไม่พบวันที่');if(!ts.length)warnings.push(metadata.time?'เวลาจาก '+metadata.source:'ไม่พบเวลา');if(new Set(allDates.map(x=>x.date)).size>1||new Set(ts.map(x=>x.time)).size>1)warnings.push('ภาพมีหลายวัน/เวลา เลือกรายการที่ต้องการ');if(!diagnosis)warnings.push('ไม่พบข้อความ A: เว้นวินิจฉัยไว้');
