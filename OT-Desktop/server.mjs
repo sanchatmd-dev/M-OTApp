@@ -7,7 +7,7 @@ import {spawn,execFile} from 'node:child_process';
 import sharp from 'sharp';
 import exifr from 'exifr';
 import {createWorker,PSM} from 'tesseract.js';
-import {parsePatient,parseRoster,linesFrom,isoDate,validDate} from './core.mjs';
+import {parsePatient,parseRoster,linesFrom,isoDate,validDate,workbookFilename,workbookFormat} from './core.mjs';
 import {makeWorkbook} from './export.mjs';
 const ROOT=path.dirname(fileURLToPath(import.meta.url)),DATA=path.join(ROOT,'data'),PORT=17869;
 await fs.mkdir(path.join(DATA,'images'),{recursive:true});
@@ -63,7 +63,25 @@ const server=http.createServer(async(req,res)=>{try{
  if(route==='/api/progress')return json(res,progress);
  if(route==='/api/read'&&req.method==='POST')return json(res,await readImage(await body(req)));
  if(route==='/api/reparse'&&req.method==='POST'){const input=await body(req);if(!/^[\w-]+$/.test(input.id))throw Error('ไม่พบรูป');const bytes=await fs.readFile(path.join(DATA,'images',input.id+'.jpg'));return json(res,await readImage({base64:bytes.toString('base64'),kind:input.kind,engine:input.engine,profile:input.profile,name:input.name}));}
- if(route==='/api/export'&&req.method==='POST'){const input=await body(req);const book=await makeWorkbook(input.state);const buffer=await book.xlsx.writeBuffer();const exportDir=path.join(ROOT,'exports');await fs.mkdir(exportDir,{recursive:true});const filename=`OT_${input.state.roster.year+543}_${String(input.state.roster.month).padStart(2,'0')}_${new Date().toISOString().replace(/[-:.TZ]/g,'')}.xlsx`;await fs.writeFile(path.join(exportDir,filename),Buffer.from(buffer));res.writeHead(200,{'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','Content-Disposition':'attachment; filename="'+filename+'"','X-OT-Saved':filename,'Cache-Control':'no-store'});return res.end(Buffer.from(buffer));}
+ if(route==='/api/export'&&req.method==='POST'){
+  const {state:exportState}=await body(req);
+  const book=await makeWorkbook(exportState);
+  const buffer=Buffer.from(await book.xlsx.writeBuffer());
+  const exportDir=path.join(ROOT,'exports');
+  await fs.mkdir(exportDir,{recursive:true});
+  const timestamp=new Date().toISOString().replace(/[-:.TZ]/g,'');
+  const filename=workbookFilename(exportState,timestamp);
+  await fs.writeFile(path.join(exportDir,filename),buffer);
+  const download=encodeURIComponent(workbookFilename(exportState)).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16).toUpperCase());
+  res.writeHead(200,{
+   'Content-Type':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+   'Content-Disposition':"attachment; filename*=UTF-8''"+download,
+   'X-OT-Export-Format':workbookFormat,
+   'X-OT-Saved':encodeURIComponent(filename),
+   'Cache-Control':'no-store'
+  });
+  return res.end(buffer);
+ }
  if(route==='/api/open-exports'&&req.method==='POST'){await fs.mkdir(path.join(ROOT,'exports'),{recursive:true});const child=spawn('explorer.exe',[path.join(ROOT,'exports')],{detached:true,stdio:'ignore',windowsHide:false});child.unref();return json(res,{ok:true});}
  if(route==='/api/backup'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'application/json','Content-Disposition':'attachment; filename="OT-backup.json"'});return res.end(JSON.stringify({version:1,state},null,2));}
  if(route.startsWith('/images/')){const id=route.slice(8);if(!/^[a-f0-9-]+\.jpg$/.test(id))throw Error('ไม่พบรูป');res.writeHead(200,{'Content-Type':'image/jpeg','Cache-Control':'private, max-age=3600'});return res.end(await fs.readFile(path.join(DATA,'images',id)));}

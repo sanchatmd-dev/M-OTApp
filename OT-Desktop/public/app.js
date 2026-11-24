@@ -1,7 +1,7 @@
-import {snapshotShiftRates,paymentProblem,months,shiftNames,shiftOf,shiftTimes,validDate,validTime,dayBefore,effectiveDuty,rowIssues,exportRows,headerPatientName,partialPatientName,patientAgeWard} from '/core.mjs';
+import {workbookFilename,workbookFormat,buddhistDate,parseBuddhistDate,missingReviewFields,reopenIncompleteCases,snapshotShiftRates,paymentProblem,months,shiftNames,shiftOf,shiftTimes,validDate,validTime,dayBefore,effectiveDuty,rowIssues,exportRows,headerPatientName,partialPatientName,patientAgeWard} from '/core.mjs';
 const $=id=>document.getElementById(id),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let state,revision=0,busy=false,stop=false,currentCase=null,rosterDraft=null,saveChain=Promise.resolve();
-const dateText=s=>validDate(s)?`${+s.slice(8)}/${+s.slice(5,7)}/${+s.slice(0,4)+543}`:'ไม่พบวันที่';
+const dateText=s=>buddhistDate(s)||'ไม่พบวันที่';
 function notify(message,type=''){const n=$('notice');n.innerHTML=`<div class="notice ${type}">${esc(message)}</div>`;n.scrollIntoView({block:'nearest',behavior:'smooth'});}
 async function request(url,options={}){const res=await fetch(url,options);if(!res.ok){let d;try{d=await res.json();}catch{}throw Error(d?.error||'เชื่อมต่อแอปไม่ได้ กรุณาเปิดแอปอีกครั้ง');}return res.json();}
 function post(url,data){return request(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});}
@@ -41,7 +41,7 @@ $('roster-file').onchange=e=>{upload(e.target.files,'roster');e.target.value='';
 for(const el of document.querySelectorAll('.dropzone')){el.ondragover=e=>{e.preventDefault();el.classList.add('drag');};el.ondragleave=()=>el.classList.remove('drag');el.ondrop=e=>{e.preventDefault();el.classList.remove('drag');upload(e.dataTransfer.files,el.classList.contains('patient')?'patient':'roster');};}
 $('reread-roster').onclick=async()=>{if(busy)return;const im=rosterImage();if(!im)return;$('reread-roster').disabled=true;$('reread-roster').textContent='กำลังอ่านตาราง…';busy=true;try{const next=await post('/api/reparse',{id:im.id,kind:'roster',engine:$('ocr-engine').value,profile:state.profile,name:im.name});state.images.push(next);snapshotShiftRates(next.result.days,state.roster.days);state.roster={month:next.result.month||0,year:next.result.year||new Date().getFullYear(),days:next.result.days,confirmed:false};await persist();$('roster-dialog').close();render();openRoster();}catch(e){alert(e.message);}finally{busy=false;$('reread-roster').disabled=false;$('reread-roster').textContent='อ่านตารางซ้ำด้วยชื่อที่บันทึก';}};
 function duplicates(c){return state.cases.some(o=>o.id!==c.id&&o.include!==false&&c.include!==false&&(c.an&&o.an===c.an||c.hn&&o.hn===c.hn)&&o.date===c.date&&o.time===c.time);}
-function renderCases(){const filter=$('case-filter').value;const rows=state.cases.filter(c=>filter==='all'||filter==='missing-name'&&!c.name||filter==='pending'&&!c.reviewed||filter==='done'&&c.reviewed||filter==='outside'&&rowIssues(c,state).includes('นอกตารางเวร'));$('review-count').textContent=`ตรวจแล้ว ${state.cases.filter(c=>c.reviewed).length}/${state.cases.length} รายการ`;$('case-table').innerHTML=rows.length?rows.map(c=>{const issues=rowIssues(c,state),outside=issues.includes('นอกตารางเวร');return `<tr><td><input type="checkbox" aria-label="รวมรายการ ${esc(c.name||c.an)}" data-include="${esc(c.id)}" ${c.include!==false?'checked':''}></td><td>${esc(dateText(c.date))}<small>${esc(c.time||'ไม่พบเวลา')}</small></td><td>${esc(dateText(effectiveDuty(c,state.nightMode)))}<small>${esc(shiftNames[c.shiftOverride||shiftOf(c.time)]||'ไม่พบเวร')}</small></td><td>${esc(c.an||'—')}<small>${esc(c.hn||'—')}</small></td><td>${esc(c.name||'ยังไม่พบชื่อ')}<small>${esc(c.ward||'ยังไม่พบ Ward')}</small></td><td><span class="status ${outside?'outside':c.reviewed?'done':''}">${outside?'นอกตารางเวร':c.reviewed?'ตรวจแล้ว':'รอตรวจ'}</span>${duplicates(c)?'<small>อาจเป็นเคสซ้ำ</small>':''}</td><td><button class="text-button" data-case="${esc(c.id)}">ตรวจ / แก้ไข</button></td></tr>`;}).join(''):'<tr><td colspan="7" class="empty">ยังไม่มีรายการในกลุ่มนี้</td></tr>';
+function renderCases(){const filter=$('case-filter').value;const rows=state.cases.filter(c=>filter==='all'||filter==='missing-name'&&!c.name||filter==='pending'&&!c.reviewed||filter==='done'&&c.reviewed||filter==='outside'&&rowIssues(c,state).includes('นอกตารางเวร'));$('review-count').textContent=`ตรวจแล้ว ${state.cases.filter(c=>c.reviewed).length}/${state.cases.length} รายการ`;$('case-table').innerHTML=rows.length?rows.map(c=>{const issues=rowIssues(c,state),outside=issues.includes('นอกตารางเวร');return `<tr><td><input type="checkbox" aria-label="รวมรายการ ${esc(c.name||c.an)}" data-include="${esc(c.id)}" ${c.include!==false?'checked':''}></td><td>${esc(dateText(c.date))}<small>${esc(c.time||'ไม่พบเวลา')}</small></td><td>${esc(dateText(effectiveDuty(c,state.nightMode)))}<small>${esc(shiftNames[c.shiftOverride||shiftOf(c.time)]||'ไม่พบเวร')}</small></td><td>${esc(c.an||'—')}<small>${esc(c.hn||'—')}</small></td><td>${esc(c.name||'ยังไม่พบชื่อ')}<small>${esc(c.ward||'ยังไม่พบ Ward')}</small></td><td><span class="status ${outside?'outside':c.reviewed?'done':''}">${!c.reviewed?'รอตรวจ':outside?'นอกตารางเวร':'ตรวจแล้ว'}</span>${duplicates(c)?'<small>อาจเป็นเคสซ้ำ</small>':''}</td><td><button class="text-button" data-case="${esc(c.id)}">ตรวจ / แก้ไข</button></td></tr>`;}).join(''):'<tr><td colspan="7" class="empty">ยังไม่มีรายการในกลุ่มนี้</td></tr>';
  $('case-table').querySelectorAll('[data-case]').forEach(b=>b.onclick=()=>openCase(b.dataset.case));$('case-table').querySelectorAll('[data-include]').forEach(b=>b.onchange=async()=>{state.cases.find(c=>c.id===b.dataset.include).include=b.checked;await persist();render();});}
 $('case-filter').onchange=renderCases;
 function updateFeeField() {
@@ -50,19 +50,36 @@ function updateFeeField() {
  $('custom-fee').disabled = !custom;
  $('custom-fee').required = custom;
 }
-$('c-fee').onchange = updateFeeField;
+$('c-fee').onchange = () => { updateFeeField(); checkReview(); };
+function reviewValues() {
+ const values = {};
+ for (const key of ['time','an','hn','name','age','ward','diagnosis','treatment','note'])
+  values[key] = $('c-'+key).value.trim();
+ values.date = parseBuddhistDate($('c-date').value);
+ const fee = $('c-fee').value;
+ values.fee = fee === 'custom' ? $('custom-fee').valueAsNumber : fee ? Number(fee) : null;
+ return values;
+}
+function checkReview() {
+ const missing = missingReviewFields(reviewValues());
+ if (!$('custom-fee').disabled && !$('custom-fee').validity.valid && !missing.includes('ค่าตอบแทน (บาท)')) missing.push('ค่าตอบแทน (บาท)');
+ $('save-review').disabled = missing.length > 0;
+ $('review-missing').textContent = missing.length ? 'กรุณาตรวจหรือกรอก ' + missing.join(', ') : '';
+ return !missing.length;
+}
+$('case-form').oninput = checkReview;
 function openCase(id){currentCase=id;const c=state.cases.find(c=>c.id===id),im=state.images.find(im=>im.id===c.imageId);$('case-source-name').textContent=im?.name||'รายการที่กรอกเอง';$('case-preview').hidden=!im;$('source-link').hidden=!im;if(im){$('case-preview').src='/images/'+im.id+'.jpg';$('source-link').href='/images/'+im.id+'.jpg';}$('raw-text').textContent=c.raw||'ไม่มีข้อความ OCR';$('case-warnings').innerHTML=`<div class="notice">${esc([...(c.warnings||[]),...(partialPatientName(c.name)?['อ่านชื่อได้บางส่วน กรุณาเทียบข้อความที่แสดงกับภาพต้นฉบับ']:[]),...(duplicates(c)?['อาจซ้ำกับรายการอื่น ตรวจเวลาและเอาเครื่องหมายรวมออกหากเป็นเคสเดียวกัน']:[])].join(' · ')||'ตรวจข้อมูลก่อนส่งออก')}</div>`;
  for(const key of ['date','time','an','hn','name','age','ward','diagnosis','treatment','note'])$('c-'+key).value=c[key]||'';
+ $('c-date').value=buddhistDate(c.date);
  $('treatments').replaceChildren(...(state.profile.treatments || []).map(word => new Option(word)));
  $('c-fee').value = c.fee == null ? '' : [50,100,400].includes(c.fee) ? String(c.fee) : 'custom';
  $('custom-fee').value = $('c-fee').value === 'custom' ? c.fee : '';
  updateFeeField();
- $('c-duty').value=c.dutyOverride||'';$('c-shift').value=c.shiftOverride||'';$('c-reviewed').checked=!!c.reviewed;$('c-include').checked=c.include!==false;$('date-source').textContent='ที่มา: '+(c.dateSource||'กรอกเอง');$('time-source').textContent='ที่มา: '+(c.timeSource||'กรอกเอง');$('date-candidates').innerHTML=(c.dateCandidates?.length>1?'วันที่อื่นในภาพ: ':'')+(c.dateCandidates?.length>1?c.dateCandidates.map(d=>`<button type="button" data-date-candidate="${esc(d)}">${esc(dateText(d))}</button>`).join(''):'');$('time-candidates').innerHTML=(c.timeCandidates?.length>1?'เวลาอื่นในภาพ: ':'')+(c.timeCandidates?.length>1?c.timeCandidates.map(t=>`<button type="button" data-time-candidate="${esc(t)}">${esc(t)}</button>`).join(''):'');$('date-candidates').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('c-date').value=b.dataset.dateCandidate;previewDuty();});$('time-candidates').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('c-time').value=b.dataset.timeCandidate;previewDuty();});previewDuty();$('case-dialog').showModal();}
-function previewDuty(){const r={date:$('c-date').value,time:$('c-time').value,dutyOverride:$('c-duty').value},d=effectiveDuty(r,state.nightMode);const s=$('c-shift').value||shiftOf(r.time);$('case-duty-preview').textContent=`ลงรายงาน: ${dateText(d)} ${shiftNames[s]||''}${state.roster.days.some(x=>x.date===d&&x.shifts.includes(s))?' · ตรงตารางเวร':' · ยังไม่ตรงตารางเวร'}`;}
+ $('c-duty').value=c.dutyOverride||'';$('c-shift').value=c.shiftOverride||'';$('c-reviewed').checked=!!c.reviewed;$('c-include').checked=c.include!==false;$('date-source').textContent='ที่มา: '+(c.dateSource||'กรอกเอง');$('time-source').textContent='ที่มา: '+(c.timeSource||'กรอกเอง');$('date-candidates').innerHTML=(c.dateCandidates?.length>1?'วันที่อื่นในภาพ: ':'')+(c.dateCandidates?.length>1?c.dateCandidates.map(d=>`<button type="button" data-date-candidate="${esc(d)}">${esc(dateText(d))}</button>`).join(''):'');$('time-candidates').innerHTML=(c.timeCandidates?.length>1?'เวลาอื่นในภาพ: ':'')+(c.timeCandidates?.length>1?c.timeCandidates.map(t=>`<button type="button" data-time-candidate="${esc(t)}">${esc(t)}</button>`).join(''):'');$('date-candidates').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('c-date').value=buddhistDate(b.dataset.dateCandidate);previewDuty();});$('time-candidates').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('c-time').value=b.dataset.timeCandidate;previewDuty();});previewDuty();$('case-dialog').showModal();}
+function previewDuty(){checkReview();const r={date:parseBuddhistDate($('c-date').value),time:$('c-time').value,dutyOverride:$('c-duty').value},d=effectiveDuty(r,state.nightMode);const s=$('c-shift').value||shiftOf(r.time);$('case-duty-preview').textContent=`ลงรายงาน: ${dateText(d)} ${shiftNames[s]||''}${state.roster.days.some(x=>x.date===d&&x.shifts.includes(s))?' · ตรงตารางเวร':' · ยังไม่ตรงตารางเวร'}`;}
 for(const id of ['c-date','c-time','c-duty','c-shift'])$(id).onchange=previewDuty;
-$('case-form').onsubmit=async e=>{e.preventDefault();const c=state.cases.find(c=>c.id===currentCase);for(const key of ['date','time','an','hn','name','age','ward','diagnosis','treatment','note'])c[key]=$('c-'+key).value.trim();const selectedFee = $('c-fee').value;
- c.fee = selectedFee === 'custom' ? $('custom-fee').valueAsNumber : selectedFee ? Number(selectedFee) : null;
- c.dutyOverride=$('c-duty').value;c.shiftOverride=$('c-shift').value;c.reviewed=$('c-reviewed').checked;c.include=$('c-include').checked;if(c.reviewed&&!c.name&&!c.an&&!c.hn)return alert('กรอกชื่อหรือเลขผู้ป่วยอย่างน้อยหนึ่งอย่าง');if(c.treatment){
+$('case-form').onsubmit=async e=>{e.preventDefault();if(!checkReview())return;const c=state.cases.find(c=>c.id===currentCase);Object.assign(c,reviewValues());
+ c.dutyOverride=$('c-duty').value;c.shiftOverride=$('c-shift').value;c.reviewed=$('c-reviewed').checked;c.include=$('c-include').checked;if(c.treatment){
  const history=state.profile.treatments??=[];
  if(!history.includes(c.treatment))history.push(c.treatment);
  }try{await persist();$('case-dialog').close();render();}catch{}};
@@ -70,10 +87,29 @@ $('delete-case').onclick=async()=>{if(!await confirmAction('ลบรายก�
 $('add-case').onclick=()=>{const c={id:crypto.randomUUID(),date:'',time:'',an:'',hn:'',name:'',age:'',ward:'',diagnosis:'',reviewed:false,include:true,warnings:[]};state.cases.push(c);persist();render();openCase(c.id);};
 function exportProblems(){const p=[];const payment=paymentProblem(state);if(payment)p.push(payment);if(!state.profile.name||!state.profile.position||!state.profile.department)p.push('กรอกข้อมูลแพทย์ให้ครบ');if(!state.roster.confirmed||!state.roster.days.length)p.push('ยืนยันตารางเวรก่อน');let pending=0,outside=0,invalid=0;for(const c of state.cases.filter(c=>c.include!==false)){if(!c.reviewed)pending++;if(!validDate(c.date)||!validTime(c.time))invalid++;const d=effectiveDuty(c,state.nightMode),s=c.shiftOverride||shiftOf(c.time);if(!state.roster.days.some(x=>x.date===d&&x.shifts.includes(s))||+d.slice(0,4)!==state.roster.year||+d.slice(5,7)!==state.roster.month)outside++;}if(pending)p.push(`ตรวจทานอีก ${pending} รายการ`);if(invalid)p.push(`แก้วันที่/เวลาอีก ${invalid} รายการ`);if(outside)p.push(`แก้ ${outside} รายการนอกตารางเวร หรือเอาเครื่องหมายรวมออก`);return p;}
 function renderExport(){const r=state.roster;$('sum-days').textContent=r.days.length;$('sum-shifts').textContent=r.days.reduce((n,d)=>n+d.shifts.length,0);$('sum-cases').textContent=state.cases.filter(c=>c.include!==false).length;$('export-period').textContent=r.month?`ประจำเดือน${months[r.month-1]} ปี ${r.year+543}`:'รอเดือนและปีจากตารางเวร';$('export-profile').textContent=state.profile.name?`${state.profile.name} · ${state.profile.position} · ${state.profile.department}`:'รอข้อมูลแพทย์';const problems=exportProblems();$('export-checks').innerHTML=problems.length?problems.map(p=>`<div class="check-line">○ ${esc(p)}</div>`).join(''):'<div class="check-line good">✓ ข้อมูลผ่านการตรวจทาน พร้อมส่งออก</div>';$('export-excel').disabled=!!problems.length||busy;}
-$('export-excel').onclick=async()=>{try{$('export-excel').disabled=true;await persist();const res=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state})});if(!res.ok)throw Error((await res.json()).error);const blob=await res.blob(),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`OT_${state.roster.year+543}_${String(state.roster.month).padStart(2,'0')}.xlsx`;a.click();setTimeout(()=>URL.revokeObjectURL(url),10000);$('export-folder').hidden=false;notify('บันทึก Excel ในโฟลเดอร์ exports ของแอปแล้ว: '+(res.headers.get('X-OT-Saved')||''),'success');}catch(e){notify(e.message,'error');}finally{renderExport();}};
+$('export-excel').onclick=async()=>{
+ try{
+  $('export-excel').disabled=true;
+  await persist();
+  const filename=workbookFilename(state);
+  const res=await fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state})});
+  if(!res.ok)throw Error((await res.json()).error);
+  if(res.headers.get('X-OT-Export-Format')!==workbookFormat)
+   throw Error('เซิร์ฟเวอร์กำลังใช้รูปแบบ Excel รุ่นเก่า กรุณารีสตาร์ตเซิร์ฟเวอร์ OT App แล้วส่งออกอีกครั้ง');
+  const blob=await res.blob();
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=filename;
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(url),10000);
+  $('export-folder').hidden=false;
+  notify('บันทึก Excel ในโฟลเดอร์ exports ของแอปแล้ว: '+decodeURIComponent(res.headers.get('X-OT-Saved')||''),'success');
+ }catch(e){notify(e.message,'error');}finally{renderExport();}
+};
 $('new-month').onclick=async()=>{if(!await confirmAction('เริ่มเดือนใหม่','ล้างตารางและรายการปัจจุบัน แต่จำข้อมูลแพทย์ไว้ ควรส่งออกหรือสำรองข้อมูลก่อน รูปเดิมยังเก็บในเครื่อง'))return;state.cases=[];state.images=[];state.roster={month:0,year:new Date().getFullYear(),days:[],confirmed:false};await persist();render();};
-$('restore-backup').onchange=async e=>{try{const file=e.target.files[0];if(!file)return;const data=JSON.parse(await file.text());if(data.version!==1||!data.state?.profile||!Array.isArray(data.state?.cases)||!Array.isArray(data.state?.roster?.days))throw Error('ไม่ใช่ไฟล์สำรองของ OT Assistant');if(!await confirmAction('นำเข้าข้อมูลสำรอง','แทนข้อมูลปัจจุบันด้วยข้อมูลในไฟล์ รูปจะเปิดได้เฉพาะเมื่อมีไฟล์ภาพเดิมในเครื่อง'))return;state=data.state;await persist();render();notify('นำเข้าข้อมูลสำรองแล้ว','success');}catch(e){notify(e.message,'error');}finally{e.target.value='';}};
+$('restore-backup').onchange=async e=>{try{const file=e.target.files[0];if(!file)return;const data=JSON.parse(await file.text());if(data.version!==1||!data.state?.profile||!Array.isArray(data.state?.cases)||!Array.isArray(data.state?.roster?.days))throw Error('ไม่ใช่ไฟล์สำรองของ OT Assistant');if(!await confirmAction('นำเข้าข้อมูลสำรอง','แทนข้อมูลปัจจุบันด้วยข้อมูลในไฟล์ รูปจะเปิดได้เฉพาะเมื่อมีไฟล์ภาพเดิมในเครื่อง'))return;state=data.state;reopenIncompleteCases(state.cases);await persist();render();notify('นำเข้าข้อมูลสำรองแล้ว','success');}catch(e){notify(e.message,'error');}finally{e.target.value='';}};
 window.addEventListener('beforeunload',e=>{if(busy){e.preventDefault();e.returnValue='กำลังอ่านรูป';}});
-try{const data=await request('/api/state');state=data.state;revision=data.revision;render();if(!state.profile.name)profileOpen();}catch(e){notify(e.message,'error');}
+try{const data=await request('/api/state');state=data.state;revision=data.revision;if(reopenIncompleteCases(state.cases))await persist();render();if(!state.profile.name)profileOpen();}catch(e){notify(e.message,'error');}
 
 $('export-folder').onclick=async()=>{try{await post('/api/open-exports',{});}catch(e){notify(e.message,'error');}};

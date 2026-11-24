@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import {isoDate,shiftOf,dutyDate,parsePatient,parseRoster,exportRows,snapshotShiftRates,timesIn} from '../core.mjs';
+import {isoDate,shiftOf,dutyDate,parsePatient,parseRoster,exportRows,snapshotShiftRates,timesIn,workbookFilename} from '../core.mjs';
 import {makeWorkbook} from '../export.mjs';
 test('Thai dates and shift boundaries',()=>{assert.equal(isoDate(21,8,69),'2026-08-21');assert.equal(isoDate(29,2,2569),'');assert.equal(isoDate(29,2,2567),'2024-02-29');for(const [time,s]of [['00:00','night'],['07:59','night'],['08:00','morning'],['15:59','morning'],['16:00','afternoon'],['23:59','afternoon']])assert.equal(shiftOf(time),s);assert.equal(shiftOf('24:00'),'');assert.equal(dutyDate('2026-09-01','00:21'),'2026-08-31');assert.equal(dutyDate('2026-09-01','00:21','same'),'2026-09-01');});
 test('clinical measurements are not treated as dotted times',()=>{assert.equal(timesIn('BSA : 0.54 BW 12.50').length,0);assert.equal(timesIn('เวลา 16.00')[0].time,'16:00');});
 test('image date/time takes priority, retain identifiers and assessment only',()=>{const r=parsePatient({text:'AN : 010123456 HN : 000123456 ชื่อ : ด.ช. ทดสอบ\n21/08/69 00:21\nA: RSV pneumonia\nP: HFNC\n20/08/69 22:17',blocks:[]},{date:'2026-08-22',time:'01:00',source:'EXIF'});assert.equal(r.date,'2026-08-21');assert.equal(r.time,'00:21');assert.equal(r.hn,'000123456');assert.equal(r.an,'010123456');assert.equal(r.diagnosis,'RSV pneumonia');assert.deepEqual(r.dateCandidates,['2026-08-21','2026-08-20']);});
 test('missing data stays blank and metadata is explicitly labeled',()=>{const r=parsePatient({text:'No A section\nMedication: antibiotics',blocks:[]},{date:'2026-08-12',time:'23:00',source:'EXIF DateTimeOriginal'});assert.equal(r.diagnosis,'');assert.equal(r.an,'');assert.equal(r.name,'');assert.equal(r.date,'2026-08-12');assert.equal(r.dateSource,'EXIF DateTimeOriginal');});
-function fixture(){return {profile:{name:'นพ. ทดสอบ ระบบ',position:'แพทย์ทดสอบ',department:'กุมารเวชกรรม'},nightMode:'previous',roster:{month:8,year:2026,confirmed:true,days:[{date:'2026-08-20',shifts:['afternoon','night']},{date:'2026-08-31',shifts:['afternoon','night']}]},cases:[{date:'2026-08-21',time:'00:21',an:'010123456',hn:'000123456',name:'ผู้ป่วยทดสอบ',diagnosis:'Test diagnosis',reviewed:true,include:true},{date:'2026-08-19',time:'18:00',name:'excluded',include:false,reviewed:false}]};}
+function fixture(){return {profile:{name:'นพ. ทดสอบ ระบบ',position:'แพทย์ทดสอบ',department:'กุมารเวชกรรม'},nightMode:'previous',roster:{month:8,year:2026,confirmed:true,days:[{date:'2026-08-20',shifts:['afternoon','night']},{date:'2026-08-31',shifts:['afternoon','night']}]},cases:[{date:'2026-08-21',time:'00:21',an:'010123456',hn:'000123456',name:'ผู้ป่วยทดสอบ',diagnosis:'Test diagnosis',ward:'NICU',treatment:'visit',fee:50,reviewed:true,include:true},{date:'2026-08-19',time:'18:00',name:'excluded',include:false,reviewed:false}]};}
 test('empty shifts, exclusion, continuous case numbers and cross-midnight',()=>{const rows=exportRows(fixture());assert.equal(rows.length,4);assert.equal(rows[0].empty,true);assert.equal(rows[1].date,'2026-08-20');assert.equal(rows[1].caseNo,1);assert.equal(rows.filter(x=>x.caseNo).length,1);});
 test('shift rates survive profile changes and apply to new shifts',()=>{
  const days=[{date:'2026-08-20',shifts:['night']}];
@@ -41,6 +41,21 @@ test('Excel round trip keeps identifiers, case fields and per-shift totals',asyn
  assert.deepEqual(['M10','N10','O10','M11'].map(a=>cell(a).result),[1150,3600,150,3750]);
  assert.equal(cell('L11').value,'Total');
  assert.equal(cell('M11').formula,'N10+O10');
+ assert.equal(cell('N11').master.address,'M11');
+ assert.equal(cell('O11').master.address,'M11');
+ assert.equal(cell('L12').value,'(Total = ค่าเวร + workload)');
+ assert.deepEqual(['A5','N5','M6','N6','O6','L11','M11','O11'].map(a=>cell(a).fill.fgColor.argb),
+  ['FFF0F5F8','FFFFFFFF','FFF0F5F8','FFF0F5F8','FFF0F5F8','FF81D41A','FFFFFF00','FFFFFF00']);
+ assert.equal(cell('M7').fill?.pattern??'none','none');
+});
+test('Excel filenames include the doctor name and retain the saved-file timestamp',()=>{
+ const state=fixture();
+ assert.equal(workbookFilename(state),'OT_2569_08_นพ. ทดสอบ ระบบ.xlsx');
+ state.profile.rosterName=' สัญชาติ ';
+ assert.equal(workbookFilename(state),'OT_2569_08_สัญชาติ.xlsx');
+ assert.equal(workbookFilename(state,'20261124123456000'),'OT_2569_08_20261124123456000_สัญชาติ.xlsx');
+ state.profile.rosterName='ชื่อ/ทดสอบ';
+ assert.equal(workbookFilename(state),'OT_2569_08_ชื่อ_ทดสอบ.xlsx');
 });
 test('export rejects unreviewed or off-roster cases',async()=>{let s=fixture();s.cases[0].reviewed=false;await assert.rejects(()=>makeWorkbook(s),/ยังไม่ตรวจทาน/);s=fixture();s.cases[0].date='2026-08-23';await assert.rejects(()=>makeWorkbook(s),/นอกตารางเวร/);});
 test('actual uploaded roster matches all seven days and sixteen shifts',async t=>{const fixture=await fs.readFile('data/integration-roster.json','utf8').catch(error=>{if(error.code!=='ENOENT')throw error;});if(fixture===undefined)return t.skip('Local roster fixture unavailable');const actual=JSON.parse(fixture).result;assert.deepEqual(actual.days.map(d=>+d.date.slice(8)),[3,7,9,12,18,20,31]);assert.equal(actual.days.reduce((n,d)=>n+d.shifts.length,0),16);assert.equal(actual.year,2026);assert.equal(actual.month,8);});

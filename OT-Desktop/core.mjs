@@ -138,3 +138,48 @@ export function paymentProblem(state) {
   return 'กรอกค่าตอบแทนของทุกเคสที่รวมใน Excel';
  return '';
 }
+
+export function buddhistDate(iso) {
+ if (!validDate(iso)) return '';
+ const [year, month, day] = iso.split('-');
+ return [day, month, Number(year) + 543].join('/');
+}
+
+export function parseBuddhistDate(value) {
+ const parts = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(digits(value));
+ if (!parts) return '';
+ const iso = [Number(parts[3]) - 543, parts[2], parts[1]].join('-');
+ return validDate(iso) ? iso : '';
+}
+
+export function missingReviewFields(c) {
+ const missing = [];
+ if (!validDate(c.date)) missing.push('วันที่ในภาพ (DD/MM/YYYY พ.ศ.)');
+ if (!validTime(c.time)) missing.push('เวลาในภาพ (HH:MM)');
+ for (const [key,label] of Object.entries({hn:'HN',name:'ชื่อ-สกุลผู้ป่วย',ward:'Ward',diagnosis:'วินิจฉัย',treatment:'การรักษา'})) {
+  if (!String(c[key] ?? '').trim()) missing.push(label);
+ }
+ if (!validAmount(c.fee)) missing.push('ค่าตอบแทน (บาท)');
+ return missing;
+}
+
+export function reopenIncompleteCases(cases) {
+ let changed = 0;
+ for (const c of cases) {
+  if (c.reviewed && missingReviewFields(c).length) {
+   c.reviewed = false;
+   changed++;
+  }
+ }
+ return changed;
+}
+
+export const workbookFormat = 'workload-v2';
+
+export function workbookFilename(state, timestamp) {
+ const {profile,roster} = state;
+ const doctor = [profile.rosterName,profile.name]
+  .map(name => (name ?? '').trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/, ''))
+  .find(Boolean);
+ return ['OT',roster.year + 543,pad(roster.month),timestamp,doctor].filter(Boolean).join('_') + '.xlsx';
+}
