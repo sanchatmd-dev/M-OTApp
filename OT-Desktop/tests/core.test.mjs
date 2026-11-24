@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import {isoDate,shiftOf,dutyDate,parsePatient,parseRoster,exportRows,snapshotShiftRates,timesIn,workbookFilename} from '../core.mjs';
+import {isoDate,shiftOf,dutyDate,parsePatient,parseRoster,exportRows,snapshotShiftRates,timesIn,workbookFilename,duplicateHnGroups} from '../core.mjs';
 import {makeWorkbook} from '../export.mjs';
 test('Thai dates and shift boundaries',()=>{assert.equal(isoDate(21,8,69),'2026-08-21');assert.equal(isoDate(29,2,2569),'');assert.equal(isoDate(29,2,2567),'2024-02-29');for(const [time,s]of [['00:00','night'],['07:59','night'],['08:00','morning'],['15:59','morning'],['16:00','afternoon'],['23:59','afternoon']])assert.equal(shiftOf(time),s);assert.equal(shiftOf('24:00'),'');assert.equal(dutyDate('2026-09-01','00:21'),'2026-08-31');assert.equal(dutyDate('2026-09-01','00:21','same'),'2026-09-01');});
 test('clinical measurements are not treated as dotted times',()=>{assert.equal(timesIn('BSA : 0.54 BW 12.50').length,0);assert.equal(timesIn('เวลา 16.00')[0].time,'16:00');});
@@ -21,7 +21,7 @@ test('Excel round trip keeps identifiers, case fields and per-shift totals',asyn
  const state=fixture();
  snapshotShiftRates(state.roster.days,[],900);
  Object.assign(state.cases[0],{treatment:'CPAP',fee:400,note:'test'});
- state.cases.push({...state.cases[0],time:'02:00',fee:650});
+ state.cases.push({...state.cases[0],time:'02:00',hn:'000123457',fee:650});
  state.cases.push({...state.cases[0],date:'2026-08-31',time:'18:00',fee:100});
  const book=await makeWorkbook(state);
  const ExcelJS=(await import('exceljs')).default;
@@ -56,6 +56,20 @@ test('Excel filenames include the doctor name and retain the saved-file timestam
  assert.equal(workbookFilename(state,'20261124123456000'),'OT_2569_08_20261124123456000_สัญชาติ.xlsx');
  state.profile.rosterName='ชื่อ/ทดสอบ';
  assert.equal(workbookFilename(state),'OT_2569_08_ชื่อ_ทดสอบ.xlsx');
+});
+test('duplicate HNs block Excel by default only within the same report shift',async()=>{
+ const state=fixture();
+ snapshotShiftRates(state.roster.days,[],900);
+ const first=state.cases[0];
+ const duplicate={...first,date:'2026-08-20',time:'23:15',shiftOverride:'night',hn:' ๐๐๐๑๒๓๔๕๖ '};
+ state.cases.push(duplicate,{...first,date:'2026-08-20',time:'18:00'},{...first,date:'2026-08-31',time:'18:00'},{...duplicate,include:false});
+ assert.deepEqual(duplicateHnGroups(state),[{date:'2026-08-20',shift:'night',hn:first.hn,cases:[first,duplicate]}]);
+ await assert.rejects(()=>makeWorkbook(state),/HN ซ้ำ.*000123456.*20\/08\/2569 เวรดึก/);
+ state.profile.blockDuplicateHn=false;
+ await makeWorkbook(state);
+ state.profile.blockDuplicateHn=true;
+ duplicate.include=false;
+ await makeWorkbook(state);
 });
 test('export rejects unreviewed or off-roster cases',async()=>{let s=fixture();s.cases[0].reviewed=false;await assert.rejects(()=>makeWorkbook(s),/ยังไม่ตรวจทาน/);s=fixture();s.cases[0].date='2026-08-23';await assert.rejects(()=>makeWorkbook(s),/นอกตารางเวร/);});
 test('actual uploaded roster matches all seven days and sixteen shifts',async t=>{const fixture=await fs.readFile('data/integration-roster.json','utf8').catch(error=>{if(error.code!=='ENOENT')throw error;});if(fixture===undefined)return t.skip('Local roster fixture unavailable');const actual=JSON.parse(fixture).result;assert.deepEqual(actual.days.map(d=>+d.date.slice(8)),[3,7,9,12,18,20,31]);assert.equal(actual.days.reduce((n,d)=>n+d.shifts.length,0),16);assert.equal(actual.year,2026);assert.equal(actual.month,8);});

@@ -1,11 +1,18 @@
 import ExcelJS from 'exceljs';
-import {missingReviewFields,paymentProblem,months,shiftNames,shiftTimes,exportRows,effectiveDuty,shiftOf} from './core.mjs';
+import {buddhistDate,duplicateHnGroups,missingReviewFields,paymentProblem,months,shiftNames,shiftTimes,exportRows,effectiveDuty,shiftOf} from './core.mjs';
 const solidFill = argb => ({type:'pattern',pattern:'solid',fgColor:{argb}});
 const mutedFill = solidFill('FFF0F5F8');
 const whiteFill = solidFill('FFFFFFFF');
 export async function makeWorkbook(state){
  if(!state.profile.name||!state.profile.position||!state.profile.department)throw Error('กรอกข้อมูลแพทย์ให้ครบ');
  if(!state.roster.month||!state.roster.year||!state.roster.confirmed)throw Error('ตรวจและยืนยันตารางเวรก่อนส่งออก');
+ if(state.profile.blockDuplicateHn!==false){
+  const groups=duplicateHnGroups(state);
+  if(groups.length){
+   const details=groups.map(({hn,date,shift,cases})=>`HN ${hn} · ${buddhistDate(date)} ${shiftNames[shift]} (${cases.length} รายการ)`);
+   throw Error('ส่งออกไม่ได้เพราะมี HN ซ้ำในเวรเดียวกัน: '+details.join(', '));
+  }
+ }
  for(const c of state.cases.filter(c=>c.include!==false)){if(!c.reviewed||missingReviewFields(c).length)throw Error('มีรายการยังไม่ตรวจทาน หรือข้อมูลที่บังคับกรอกไม่ครบ');const d=effectiveDuty(c,state.nightMode);if(+d.slice(0,4)!==state.roster.year||+d.slice(5,7)!==state.roster.month)throw Error('มีรายการอยู่นอกเดือนที่เลือก');if(!state.roster.days.some(r=>r.date===d&&r.shifts.includes(c.shiftOverride||shiftOf(c.time))))throw Error('มีรายการนอกตารางเวร กรุณาแก้วัน/เวร หรือเอาเครื่องหมายรวมออก');}
  const problem=paymentProblem(state);if(problem)throw Error(problem);
  const book=new ExcelJS.Workbook();book.creator='OT Assistant (offline)';const sheet=book.addWorksheet('ค่าตอบแทน',{views:[{state:'frozen',ySplit:4,xSplit:3}]});

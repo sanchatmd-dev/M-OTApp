@@ -111,6 +111,19 @@ export function parsePatient(data,metadata={}){const raw=digits(data.text),lines
  return {date,time,an:getID('AN'),hn:getID('HN'),name,age,ward,diagnosis,dateSource:allDates.length?'ข้อความในภาพ':metadata.source||'ไม่พบ',timeSource:ts.length?'ข้อความในภาพ':metadata.source||'ไม่พบ',dateCandidates:[...new Set(allDates.map(x=>x.date))],timeCandidates:[...new Set(ts.map(x=>x.time))],warnings,raw};
 }
 export function effectiveDuty(row,nightMode){return row.dutyOverride||dutyDate(row.date,row.time,nightMode);}
+export function duplicateHnGroups(state) {
+ const groups = new Map();
+ for (const row of state.cases) {
+  const hn = digits(row.hn).trim();
+  const date = effectiveDuty(row,state.nightMode);
+  const shift = row.shiftOverride || shiftOf(row.time);
+  if (row.include === false || !hn || !validDate(date) || !Object.hasOwn(shiftNames,shift)) continue;
+  const key = JSON.stringify([date,shift,hn]);
+  if (!groups.has(key)) groups.set(key,{date,shift,hn,cases:[]});
+  groups.get(key).cases.push(row);
+ }
+ return [...groups.values()].filter(group => group.cases.length > 1);
+}
 export function rowIssues(row,state){let a=[];if(!validDate(row.date))a.push('วันที่ไม่ถูกต้อง');if(!validTime(row.time))a.push('เวลาไม่ครบ');if(!row.name&&!row.an&&!row.hn)a.push('ไม่มีชื่อหรือเลขผู้ป่วย');const dd=effectiveDuty(row,state.nightMode),shift=row.shiftOverride||shiftOf(row.time);if(!state.roster.days.some(d=>d.date===dd&&d.shifts.includes(shift)))a.push('นอกตารางเวร');if(!row.reviewed)a.push('รอตรวจทาน');return a;}
 export function exportRows(state){const list=[];const grouped=new Map();const included=state.cases.filter(c=>c.include!==false);for(const row of included){const d=effectiveDuty(row,state.nightMode),shift=row.shiftOverride||shiftOf(row.time);const key=d+'|'+shift;if(!grouped.has(key))grouped.set(key,[]);grouped.get(key).push(row);}
  for(const d of state.roster.days){for(const s of d.shifts){const key=d.date+'|'+s;if(!grouped.has(key))grouped.set(key,[]);}}
